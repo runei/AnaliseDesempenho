@@ -3,14 +3,17 @@
 #include <stdint.h> /* define inteiros de tamanho específico */
 #include <string.h>
 
-#define K_THRESHOLDING 107
+#define K_WOOD 107
+#define WHITE 255
+#define BLACK 0
+#define SIZE_STACK 50
 
 #pragma pack(push, 1) /* diz pro compilador não alterar alinhamento 
 						ou tamanho da struct */
 struct Pixel {
-	uint8_t r;
-	uint8_t g;
 	uint8_t b;
+	uint8_t g;
+	uint8_t r;
 };
 /*struct Pixel{uint8_t r,g,b;};*/
 
@@ -53,7 +56,10 @@ struct Pixel **loadBitmap(char *file_name, struct BitmapHeader *bH)
 	if (imagem == NULL)
 		perror("Erro ao abrir a imagem");
 	
-	fread(bH, sizeof(struct BitmapHeader), 1, imagem);
+	if (!fread(bH, sizeof(struct BitmapHeader), 1, imagem))
+	{
+		perror("Erro ao ler bitmap header");	
+	}
 	
 	struct Pixel **matrix;
 
@@ -64,16 +70,19 @@ struct Pixel **loadBitmap(char *file_name, struct BitmapHeader *bH)
 	for (i = 0; i < bH->height; i++) {
 		matrix[i] = (struct Pixel *) malloc(sizeof(struct Pixel) * bH->width);
 	}
-	
 	/* leitura */
 	for (i = 0; i < bH->height; i++) {
 		for (j = 0; j < bH->width; j++) {
-			fread(&matrix[i][j], sizeof(struct Pixel), 1, imagem);
-			int media = (matrix[i][j].r + matrix[i][j].g + matrix[i][j].b) / 3;
-			int val = 0;
-			if (media > K_THRESHOLDING)
+			if (!fread(&matrix[i][j], sizeof(struct Pixel), 1, imagem))
 			{
-				val = 255;
+//				perror("Erro ao ler imagem");
+				continue;	
+			}
+			int media = (matrix[i][j].r + matrix[i][j].g + matrix[i][j].b) / 3;
+			int val = BLACK;
+			if (media > K_WOOD)
+			{
+				val = WHITE;
 			}
 			matrix[i][j].r = val; 
 			matrix[i][j].g = val;
@@ -121,46 +130,149 @@ void printBitmap(struct BitmapHeader bH, struct Pixel **matrix)
 	}	
 }
 
+int invertPosMatrix(int height, int val)
+{
+	return height - val - 1;
+}
+
 int getLinhaInicial(struct BitmapHeader bH, struct Pixel **matrix)
 {
 	//nao considera imagens vazias
 	int i = bH.height - 1;
-	while (matrix[i][10].r == 0)
+	while (matrix[i][10].r == BLACK)
 	{
 		--i;
 	}
-	return bH.height - i - 1;
+	return invertPosMatrix(bH.height, i);
 }
 
 int getLinhaFinal(struct BitmapHeader bH, struct Pixel **matrix)
 {
 	//nao considera imagens vazias
 	int i = 0;
-	while (matrix[i][10].r == 0)
+	while (matrix[i][10].r == BLACK)
 	{
 		++i;
 	}
-	return bH.height - i - 1;
+	return invertPosMatrix(bH.height, i);
 }
 
-void getWoodNodes(int init_line, int end_line, Bitmap bitmap)
+int checkErosion(int i, int j, struct Pixel **matrix)
 {
-	char **flag_matrix;
-	int size = end_line - init_line;
-	flag_matrix = (char **)malloc(sizeof(char *) * size);
-	for (int i = 0; i < size; ++i)
+	for (int k = -1; k < 2; ++k)
 	{
-		flag_matrix[i] = (char *)malloc(sizeof(char) * bitmap.bmp_header.width);
+		for (int l = -1; l < 2; ++l)
+		{
+			if (matrix[i-k][j-l].r == WHITE)
+			{
+				return 0;
+			}
+		}
+	}
+	return 1;
+}
+
+void erosion(int init_line, int end_line, Bitmap bitmap)
+{
+	unsigned char **flag_matrix;
+	int size = end_line - init_line;
+	flag_matrix = (unsigned char **)malloc(sizeof(unsigned char *) * size);
+	//matriz bitmap é invertida
+	int temp_init = invertPosMatrix(bitmap.bmp_header.height, end_line);
+	int temp_end = invertPosMatrix(bitmap.bmp_header.height, init_line);
+	for (int i = temp_init; i < temp_end; ++i)
+	{
+		flag_matrix[i-temp_init] = (unsigned char *)malloc(sizeof(unsigned char) * bitmap.bmp_header.width);
+		for (int j = 0; j < bitmap.bmp_header.width; ++j)
+		{
+			if (i == temp_init || i == temp_end - 1 || j == 0 || j == bitmap.bmp_header.width - 1 || !checkErosion(i, j, bitmap.matrix))
+			{
+				flag_matrix[i - temp_init][j] = WHITE;
+			}
+			else
+			{
+				flag_matrix[i - temp_init][j] = BLACK;
+			}
+		}
 	}
 
-	for (int i = init_line; i < end_line; ++i)
+	for (int i = temp_init; i < temp_end; ++i)
 	{
-		for (int j = 0; i < bitmap.bmp_header.width; ++j)
+		for (int j = 0; j < bitmap.bmp_header.width; ++j)
 		{
-			
-			if (bitmap.matrix[i][j] == 0 && bitmap.matrix[i])
-			{
+			bitmap.matrix[i][j].r = flag_matrix[i - temp_init][j];
+			bitmap.matrix[i][j].g = flag_matrix[i - temp_init][j];
+			bitmap.matrix[i][j].b = flag_matrix[i - temp_init][j];
+		}
+	}
 
+	//free memory
+	for (int i = 0; i < size; i++) 
+	{
+		free(flag_matrix[i]);
+	}
+	free(flag_matrix);
+}
+
+/*
+void insertStack(int x, int y, Pos *stack, int *stack_pointer)
+{
+	stack[stack_pointer].x = x;
+	stack[stack_pointer].y = y;
+	++stack_pointer;
+}
+*/
+
+int flagSegment(int i, int j, int temp_init, Bitmap bitmap, unsigned char **flag_matrix, int val)
+{
+	//val controla o valor do j dentro do while
+	int res = j;
+	while (res < bitmap.bmp_header.width && 
+		   res >= 0 &&
+		   bitmap.matrix[i][res].r == BLACK)
+	{
+		flag_matrix[i-temp_init][res] = 1;
+		bitmap.matrix[i][res].b = 255;
+		res += val;
+	}
+	//retorna o maior ou menor j encontrado
+	return res;
+}
+
+int getWoodNodes(int init_line, int end_line, Bitmap bitmap)
+{
+	unsigned char **flag_matrix;
+	int size = end_line - init_line;
+	// Pos stack[SIZE_STACK];
+	// int stack_pointer = 0;
+
+	//matriz bitmap é invertida
+	int temp_init = invertPosMatrix(bitmap.bmp_header.height, end_line);
+	int temp_end = invertPosMatrix(bitmap.bmp_header.height, init_line);
+
+	int n_nodes = 0;
+
+	flag_matrix = (unsigned char **)malloc(sizeof(unsigned char *) * size);
+	for (int i = 0; i < size; ++i)
+	{
+		flag_matrix[i-temp_init] = (unsigned char *)malloc(sizeof(unsigned char) * bitmap.bmp_header.width);
+		memset(flag_matrix[i], 0, bitmap.bmp_header.width);
+	}
+	
+	for (int i = temp_init; i < temp_end; ++i)
+	{
+		for (int j = 0; j < bitmap.bmp_header.width; ++j)
+		{
+			if (!flag_matrix[i-temp_init][j])
+			{
+				flag_matrix[i-temp_init][j] = 1;
+				if (bitmap.matrix[i][j].r == BLACK)
+				{
+					++n_nodes;
+					int l = i;
+						int left_j = flagSegment(l, j, temp_init, bitmap, flag_matrix, -1);
+						int right_j = flagSegment(l, j, temp_init, bitmap, flag_matrix, 1);
+				}
 			}
 		}
 	}
@@ -171,6 +283,8 @@ void getWoodNodes(int init_line, int end_line, Bitmap bitmap)
 		free(flag_matrix[i]);
 	}
 	free(flag_matrix);
+
+	return n_nodes;
 }
 
 int main() {
@@ -186,9 +300,16 @@ int main() {
 
 	int init_line = getLinhaInicial(bitmap.bmp_header, bitmap.matrix);
 	int end_line = getLinhaFinal(bitmap.bmp_header, bitmap.matrix);
-	getWoodNodes(init_line, end_line, bitmap);
+	erosion(init_line, end_line, bitmap);
+	erosion(init_line, end_line, bitmap);
 
-	printf("%s\t%d %d\n", file_name, init_line, end_line);
+	saveBitmap("nova_imagem2.bmp", bitmap.bmp_header, bitmap.matrix);
+
+	int n_nodes = getWoodNodes(init_line, end_line, bitmap);
+
+	saveBitmap("nova_imagem3.bmp", bitmap.bmp_header, bitmap.matrix);
+
+	printf("%s\t%d %d %d\n", file_name, init_line, end_line, n_nodes);
 	freeMatrix(bitmap.bmp_header, bitmap.matrix);
 	return 0;
 }
