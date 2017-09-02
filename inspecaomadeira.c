@@ -214,15 +214,6 @@ void erosion(int init_line, int end_line, Bitmap bitmap)
 	free(flag_matrix);
 }
 
-/*
-void insertStack(int x, int y, Pos *stack, int *stack_pointer)
-{
-	stack[stack_pointer].x = x;
-	stack[stack_pointer].y = y;
-	++stack_pointer;
-}
-*/
-
 int flagSegment(int i, int j, int temp_init, Bitmap bitmap, unsigned char **flag_matrix, int val)
 {
 	//val controla o valor do j dentro do while
@@ -239,13 +230,29 @@ int flagSegment(int i, int j, int temp_init, Bitmap bitmap, unsigned char **flag
 	return res;
 }
 
+int max(int a, int b)
+{
+	if (a > b)
+	{
+		return a;
+	}
+	return b;
+}
+
+int min(int a, int b)
+{
+	if (a < b)
+	{
+		return a;
+	}
+	return b;
+}
+
 int getWoodNodes(int init_line, int end_line, Bitmap bitmap)
 {
 	unsigned char **flag_matrix;
 	int size = end_line - init_line;
-	// Pos stack[SIZE_STACK];
-	// int stack_pointer = 0;
-
+	
 	//matriz bitmap é invertida
 	int temp_init = invertPosMatrix(bitmap.bmp_header.height, end_line);
 	int temp_end = invertPosMatrix(bitmap.bmp_header.height, init_line);
@@ -269,9 +276,27 @@ int getWoodNodes(int init_line, int end_line, Bitmap bitmap)
 				if (bitmap.matrix[i][j].r == BLACK)
 				{
 					++n_nodes;
-					int l = i;
-						int left_j = flagSegment(l, j, temp_init, bitmap, flag_matrix, -1);
-						int right_j = flagSegment(l, j, temp_init, bitmap, flag_matrix, 1);
+					int k = i;
+					int l = j;
+					int local_max_j, local_min_j;
+					int global_max_j = j;
+					int global_min_j = j;
+					do 
+					{
+						local_min_j = flagSegment(k, l, temp_init, bitmap, flag_matrix, -1);
+						local_max_j = flagSegment(k, l, temp_init, bitmap, flag_matrix, 1);
+						printf("%d\n", local_min_j);
+						++k;
+						l = local_min_j;
+						while (bitmap.matrix[k][l].r != BLACK && l <= local_max_j)
+						{
+							++l;
+						}
+						global_max_j = max(global_max_j, local_max_j);
+						global_min_j = min(global_min_j, local_min_j);
+					} while (k < temp_end && l <= local_max_j);
+					printf("%d %d\n", global_max_j,global_min_j);
+					// printf("%d %d\n", invertPosMatrix(bitmap.bmp_header.height, (k+i)/2), (global_max_j+global_min_j)/2);
 				}
 			}
 		}
