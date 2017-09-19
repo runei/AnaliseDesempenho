@@ -3,8 +3,13 @@
 #include <stdint.h> /* define inteiros de tamanho específico */
 #include <string.h>
 #include <dirent.h>
+#include <float.h>
 
 #define K_WOOD 107
+#define LEFT -1
+#define RIGHT 1
+#define UP 1
+#define DOWN -1
 #define WHITE 0xFFFFFF
 #define BLACK 0x000000
 #define BLUE 0x0000FF
@@ -38,12 +43,17 @@ typedef struct {
 typedef struct {
 	int row;
 	int col;
-} Node;
+} Point;
 
 typedef struct {
 	int size;
-	Node *nodes;
+	Point *nodes;
 } Nodes;
+
+typedef struct {
+	int stack_pointer;
+	Point *stack;
+} Stack;
 
 uint8_t getBlue(unsigned int color)
 {
@@ -58,6 +68,96 @@ uint8_t getGreen(unsigned int color)
 uint8_t getRed(unsigned int color)
 {
 	return (color >> 16) & 0xff;
+}
+
+unsigned int setColor(int red, int green, int blue)
+{
+	return (255 << 24) | (red << 16) | (green << 8) | blue;
+}
+
+void push(Stack *stack, Point val)
+{
+	if (stack == NULL)
+	{
+		perror("Stack = NULL");
+		return;
+	}
+	++stack->stack_pointer;
+	Point *p = (Point *)realloc(stack->stack, (stack->stack_pointer+1) * sizeof(Point));
+	if (p != NULL)
+	{
+		stack->stack = p;
+	}
+	stack->stack[stack->stack_pointer] = val;
+}
+
+Point pop(Stack *stack)
+{
+	Point p = stack->stack[stack->stack_pointer];
+	--stack->stack_pointer;
+	return p;
+}
+
+unsigned int **sobelFiltering(Bitmap *bmp)
+     /* Spatial filtering of image data */
+     /* Sobel filter (horizontal differentiation */
+     /* Input: image1[y][x] ---- Outout: image2[y][x] */
+{
+	unsigned int **image2 = (unsigned int **) malloc(sizeof(unsigned int *) * bmp->bmp_header.height);
+	for (int i = 0; i < bmp->bmp_header.height; i++) {
+		image2[i] = (unsigned int *) malloc(sizeof(unsigned int) * bmp->bmp_header.width);
+	}
+  /* Definition of Sobel filter in horizontal direction */
+	int weight[3][3] = {{ -1,  0,  1 },
+						{ -2,  0,  2 },
+						{ -1,  0,  1 }};
+	double pixel_value;
+	double min, max;
+	int x, y, i, j;  /* Loop variable */
+
+  /* Maximum values calculation after filtering*/
+	printf("Now, filtering of input image is performed\n\n");
+	min = DBL_MAX;
+	max = -DBL_MAX;
+	for (y = 1; y < bmp->bmp_header.height - 1; y++) {
+		for (x = 1; x < bmp->bmp_header.width - 1; x++) {
+			pixel_value = 0.0;
+			for (j = -1; j <= 1; j++) {
+				for (i = -1; i <= 1; i++) {
+					pixel_value += weight[j + 1][i + 1] * bmp->matrix[y + j][x + i];
+				}
+			}
+			if (pixel_value < min) min = pixel_value;
+			if (pixel_value > max) max = pixel_value;
+		}
+	}
+	if ((int)(max - min) == 0) {
+		printf("Nothing exists!!!\n\n");
+		exit(1);
+	}
+
+  /* Initialization of image2[y][x] */
+	int x_size2 = bmp->bmp_header.width;
+	int y_size2 = bmp->bmp_header.height;
+	for (y = 0; y < y_size2; y++) {
+		for (x = 0; x < x_size2; x++) {
+			image2[y][x] = 0;
+		}
+	}
+  /* Generation of image2 after linear transformtion */
+	for (y = 1; y < bmp->bmp_header.height - 1; y++) {
+		for (x = 1; x < bmp->bmp_header.width - 1; x++) {
+			pixel_value = 0.0;
+			for (j = -1; j <= 1; j++) {
+				for (i = -1; i <= 1; i++) {
+					pixel_value += weight[j + 1][i + 1] * bmp->matrix[y + j][x + i];
+				}
+			}
+			pixel_value = WHITE * (pixel_value - min) / (max - min);
+			image2[y][x] = (unsigned int)pixel_value;
+		}
+	}
+	return image2;
 }
 
 unsigned int **loadBitmap(char *file_name, BitmapHeader *bH)
@@ -97,6 +197,8 @@ unsigned int **loadBitmap(char *file_name, BitmapHeader *bH)
 				val = WHITE;
 			}
 			matrix[i][j] = val;
+			// int media = (getRed(matrix[i][j]) + getGreen(matrix[i][j]) + getBlue(matrix[i][j])) / 3;
+			// matrix[i][j] = setColor(media, media, media);
 		}
 	}
 
@@ -222,22 +324,6 @@ void erosion(int init_line, int end_line, Bitmap bitmap)
 	free(flag_matrix);
 }
 
-int flagSegment(int i, int j, int temp_init, Bitmap bitmap, unsigned char **flag_matrix, int val)
-{
-	//val controla o valor do j dentro do while
-	int res = j;
-	while (res < bitmap.bmp_header.width && 
-		   res >= 0 &&
-		   bitmap.matrix[i][res] == BLACK)
-	{
-		flag_matrix[i-temp_init][res] = 1;
-		bitmap.matrix[i][res] = BLUE;
-		res += val;
-	}
-	//retorna o maior ou menor j encontrado
-	return res;
-}
-
 int max(int a, int b)
 {
 	if (a > b)
@@ -256,21 +342,42 @@ int min(int a, int b)
 	return b;
 }
 
-/*void floodFill(int i, int j, Bitmap bitmap, unsigned char **flag_matrix, NodePoints *np)
+int fill(int temp_init, Point p, Bitmap *bmp, char **flag_matrix, char side)
 {
-	if (bitmap.matrix[i][j] == BLACK && bitmap.matrix[i][j] != BLUE)
+	int result = p.col;
+	while ( p.col < bmp->bmp_header.width &&
+			p.col >= 0 &&
+			bmp->matrix[p.row][result] == BLACK)
 	{
-		bitmap.matrix[i][j] = BLUE;
-		floodFill(i+1, j, bitmap, flag_matrix);	
-		floodFill(i-1, j, bitmap, flag_matrix);	
-		floodFill(i, j+1, bitmap, flag_matrix);	
-		floodFill(i, j-1, bitmap, flag_matrix);	
+		flag_matrix[p.row-temp_init][result] = 1;
+		result += side;
 	}
-}*/
+	return result;
+}
+
+void findStartPoints(int xleft, int xright, int col, unsigned int *row, Stack *stack, char *row_flag_matrix)
+{
+	char new_point = 1;
+	int i = xleft;
+	while (i <= xright)
+	{
+		if (new_point && !row_flag_matrix[i] && row[i] == BLACK)
+		{
+			Point p = {col, i};
+			push(stack, p);
+			new_point = 0;
+		}
+		else if (!new_point && row[i] == WHITE)
+		{
+			new_point = 1;
+		}
+		++i;
+	}
+}
 
 Nodes getWoodNodes(int init_line, int end_line, Bitmap bitmap)
 {
-	unsigned char **flag_matrix;
+	char **flag_matrix;
 	int size = end_line - init_line;
 	
 	//matriz bitmap é invertida
@@ -279,11 +386,11 @@ Nodes getWoodNodes(int init_line, int end_line, Bitmap bitmap)
 
 	Nodes nodes = {0, NULL};
 
-	flag_matrix = (unsigned char **)malloc(sizeof(unsigned char *) * size);
+	flag_matrix = (char **)malloc(sizeof(char *) * size);
 	for (int i = 0; i < size; ++i)
 	{
-		flag_matrix[i-temp_init] = (unsigned char *)malloc(sizeof(unsigned char) * bitmap.bmp_header.width);
-		memset(flag_matrix[i], 0, bitmap.bmp_header.width);
+		flag_matrix[i] = (char *)malloc(sizeof(char) * bitmap.bmp_header.width);
+		// memset(flag_matrix[i], 0, bitmap.bmp_header.width);
 	}
 	
 	for (int i = temp_init; i < temp_end; ++i)
@@ -296,31 +403,38 @@ Nodes getWoodNodes(int init_line, int end_line, Bitmap bitmap)
 				if (bitmap.matrix[i][j] == BLACK)
 				{
 					++nodes.size;
-					nodes.nodes = (Node *)realloc(nodes.nodes, nodes.size * sizeof(Node));
+					nodes.nodes = (Point *)realloc(nodes.nodes, nodes.size * sizeof(Point));
+					
+					int max_col, min_col, max_row, min_row;
+					max_col = min_col = j;
+					max_row = min_row = i;
+					Stack stack = {0, NULL};
 
-					int k = i;
-					int l = j;
-					int local_max_j, local_min_j;
-					int global_max_j = j;
-					int global_min_j = j;
-					do 
+					Point p = {i, j};
+					push(&stack, p);
+					while (stack.stack_pointer)
 					{
-						local_min_j = flagSegment(k, l, temp_init, bitmap, flag_matrix, -1);
-						local_max_j = flagSegment(k, l, temp_init, bitmap, flag_matrix, 1);
-						++k;
-						l = local_min_j;
-						while (bitmap.matrix[k][l] != BLACK && l <= local_max_j)
-						{
-							++l;
-						}
-						global_max_j = max(global_max_j, local_max_j);
-						global_min_j = min(global_min_j, local_min_j);
-					} while (k < temp_end && l <= local_max_j);
-					nodes.nodes[nodes.size - 1].col = (global_max_j + global_min_j) / 2;
-					nodes.nodes[nodes.size - 1].row = invertPosMatrix(bitmap.bmp_header.height, (k+i)/2);
+						p = pop(&stack);
+
+						max_col = max(max_col, p.col);
+						min_col = min(min_col, p.col);
+						max_row = max(max_row, p.row);
+						min_row = min(min_row, p.row);
+
+						int xleft = fill(temp_init, p, &bitmap, flag_matrix, LEFT);
+						int xright = fill(temp_init, p, &bitmap, flag_matrix, RIGHT);
+						findStartPoints(xleft, xright, p.row-1, bitmap.matrix[p.row-1], &stack, flag_matrix[p.row-temp_init-1]);
+						findStartPoints(xleft, xright, p.row+1, bitmap.matrix[p.row+1], &stack, flag_matrix[p.row-temp_init+1]);
+						// printf("%d\n", stack.stack_pointer);
+					}
+
+					nodes.nodes[nodes.size - 1].col = (max_col + min_col) / 2;
+					nodes.nodes[nodes.size - 1].row = invertPosMatrix(bitmap.bmp_header.height, (max_row + min_row) / 2);
+					free(stack.stack);
+/*
 					char name[50];
 					snprintf(name,50,"testes/nova_imagem%d_%d.bmp", i, j);
-					saveBitmap(name, bitmap.bmp_header, bitmap.matrix);
+					saveBitmap(name, bitmap.bmp_header, bitmap.matrix);*/
 				}
 			}
 		}
@@ -350,28 +464,32 @@ int main()
 	while ((ent = readdir(dir)) != NULL)
 	{
 		char *ext = strrchr(ent->d_name, '.');
-		if (strcmp(ent->d_name, "st1183.bmp") == 0)
-		// if (ext != NULL && strcmp(ext, ".bmp") == 0)
+		// if (strcmp(ent->d_name, "st1285.bmp") == 0)
+		if (ext != NULL && strcmp(ext, ".bmp") == 0)
 		{
 			Bitmap bitmap;
 			char file_name[20];
 			snprintf(file_name, sizeof(file_name), "%s%s", dir_name, ent->d_name);
 			bitmap.matrix = loadBitmap(file_name, &bitmap.bmp_header);
 
-			saveBitmap("nova_imagem.bmp", bitmap.bmp_header, bitmap.matrix);
+			// saveBitmap("nova_imagem.bmp", bitmap.bmp_header, bitmap.matrix);
+
+			// bitmap.matrix = sobelFiltering(&bitmap);
+
+			// saveBitmap("nova_imagem4.bmp", bitmap.bmp_header, bitmap.matrix);			
 
 			int init_line = getLinhaInicial(bitmap.bmp_header, bitmap.matrix);
 			int end_line = getLinhaFinal(bitmap.bmp_header, bitmap.matrix);
-			for (int i = 0; i < 2; ++i)
+			for (int i = 0; i < 3; ++i)
 			{
 				erosion(init_line, end_line, bitmap);
 			}
 
-			saveBitmap("nova_imagem2.bmp", bitmap.bmp_header, bitmap.matrix);
+			// saveBitmap("nova_imagem2.bmp", bitmap.bmp_header, bitmap.matrix);
 
 			Nodes nodes = getWoodNodes(init_line, end_line, bitmap);
 
-			saveBitmap("nova_imagem3.bmp", bitmap.bmp_header, bitmap.matrix);
+			// saveBitmap("nova_imagem3.bmp", bitmap.bmp_header, bitmap.matrix);
 
 			printf("%s %d %d %d", ent->d_name, init_line, end_line, nodes.size);
 			for (int i = 0; i < nodes.size; ++i)
