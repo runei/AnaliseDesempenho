@@ -14,6 +14,7 @@
 #define WHITE 0xFFFFFF
 #define BLACK 0x000000
 #define BLUE 0x0000FF
+#define GREEN 0x00FF00
 #define BLACK_BACKGOURND_WOOD 0x0C0C0C
 
 #pragma pack(push, 1)
@@ -141,8 +142,6 @@ unsigned int **sobelFiltering(Bitmap *bmp)
 	int weight_y[3][3] = {{ 1,  2,  1 },
 						{ 0,  0,  0 },
 						{ -1,  -2,  -1 }};
-	double pixel_value;
-	double min, max;
 
   /* Maximum values calculation after filtering*/
 	for (int i = 1; i < bmp->bmp_header.height - 1; ++i)
@@ -344,7 +343,11 @@ void dilation(int init_line, int end_line, Bitmap bitmap)
 		flag_matrix[i-temp_init] = (unsigned int *)malloc(sizeof(unsigned int) * bitmap.bmp_header.width);
 		for (int j = 0; j < bitmap.bmp_header.width; ++j)
 		{
-			if (i == temp_init || i == temp_end - 1 || j == 0 || j == bitmap.bmp_header.width - 1 || !checkDilation(i, j, bitmap.matrix))
+			if (i == temp_init || i == temp_end - 1 || j == 0 || j == bitmap.bmp_header.width - 1)
+			{
+				flag_matrix[i - temp_init][j] = BLACK;	
+			}
+			else if (!checkDilation(i, j, bitmap.matrix))
 			{
 				flag_matrix[i - temp_init][j] = WHITE;
 			}
@@ -411,17 +414,16 @@ void erosion(int init_line, int end_line, Bitmap bitmap)
 	free(flag_matrix);
 }
 
-int fill(int temp_init, Point p, Bitmap *bmp, char **flag_matrix, char side)
+int fill(int temp_init, Point p, Bitmap *bmp, char **flag_matrix, char side, unsigned int color)
 {
 	int result = p.col;
-	while ( p.col < bmp->bmp_header.width &&
-			p.col >= 0 &&
-			bmp->matrix[p.row][result] == BLACK)
+	do
 	{
 		flag_matrix[p.row-temp_init][result] = 1;
+		bmp->matrix[p.row][result] = color;
 		result += side;
-	}
-	return result;
+	} while (result < bmp->bmp_header.width && result >= 0 && bmp->matrix[p.row][result] == BLACK);
+	return result - side;
 }
 
 void findStartPoints(int xleft, int xright, int col, unsigned int *row, Stack *stack, char *row_flag_matrix)
@@ -459,10 +461,10 @@ Nodes getWoodNodes(int init_line, int end_line, Bitmap bitmap)
 	for (int i = 0; i < size; ++i)
 	{
 		flag_matrix[i] = (char *)malloc(sizeof(char) * bitmap.bmp_header.width);
-		// memset(flag_matrix[i], 0, bitmap.bmp_header.width);
+		memset(flag_matrix[i], 0, bitmap.bmp_header.width);
 	}
 	
-	for (int i = temp_init + 10; i < temp_end - 10; ++i) // nao conta contornos das linhas
+	for (int i = temp_init; i < temp_end; ++i) // nao conta contornos das linhas
 	{
 		for (int j = 0; j < bitmap.bmp_header.width; ++j)
 		{
@@ -471,8 +473,6 @@ Nodes getWoodNodes(int init_line, int end_line, Bitmap bitmap)
 				flag_matrix[i-temp_init][j] = 1;
 				if (bitmap.matrix[i][j] == BLACK)
 				{
-					++nodes.size;
-					nodes.nodes = (Point *)realloc(nodes.nodes, nodes.size * sizeof(Point));
 					
 					int max_col, min_col, max_row, min_row;
 					max_col = min_col = j;
@@ -484,21 +484,32 @@ Nodes getWoodNodes(int init_line, int end_line, Bitmap bitmap)
 					while (stack.stack_pointer)
 					{
 						p = pop(&stack);
-
 						max_col = max(max_col, p.col);
 						min_col = min(min_col, p.col);
 						max_row = max(max_row, p.row);
 						min_row = min(min_row, p.row);
 
-						int xleft = fill(temp_init, p, &bitmap, flag_matrix, LEFT);
-						int xright = fill(temp_init, p, &bitmap, flag_matrix, RIGHT);
-						findStartPoints(xleft, xright, p.row-1, bitmap.matrix[p.row-1], &stack, flag_matrix[p.row-temp_init-1]);
-						findStartPoints(xleft, xright, p.row+1, bitmap.matrix[p.row+1], &stack, flag_matrix[p.row-temp_init+1]);
-						// printf("%d\n", stack.stack_pointer);
+						int xleft, xright;
+
+						xleft = fill(temp_init, p, &bitmap, flag_matrix, LEFT, BLUE);
+						xright = fill(temp_init, p, &bitmap, flag_matrix, RIGHT, BLUE);
+						if (p.row-temp_init > 0)
+						{
+							findStartPoints(xleft, xright, p.row-1, bitmap.matrix[p.row-1], &stack, flag_matrix[p.row-temp_init-1]);
+						}
+						if (p.row-temp_init < size - 1)
+						{
+							findStartPoints(xleft, xright, p.row+1, bitmap.matrix[p.row+1], &stack, flag_matrix[p.row-temp_init+1]);
+						}
 					}
 
-					nodes.nodes[nodes.size - 1].col = (max_col + min_col) / 2;
-					nodes.nodes[nodes.size - 1].row = invertPosMatrix(bitmap.bmp_header.height, (max_row + min_row) / 2);
+					if (min_row > temp_init && max_row < temp_end - 1)
+					{
+						++nodes.size;
+						nodes.nodes = (Point *)realloc(nodes.nodes, nodes.size * sizeof(Point));
+						nodes.nodes[nodes.size - 1].col = (max_col + min_col) / 2;
+						nodes.nodes[nodes.size - 1].row = invertPosMatrix(bitmap.bmp_header.height, (max_row + min_row) / 2);
+					}
 					free(stack.stack);
 /*
 					char name[50];
@@ -642,14 +653,14 @@ int otsuThresholder(Bitmap *bitmap)
 	return threshold;
 }
 
-int binarizeBitmap(int init_line, int end_line, Bitmap *bitmap, int threshold)
+void binarizeBitmap(int init_line, int end_line, Bitmap *bitmap, int threshold)
 {
 	int temp_init = invertPosMatrix(bitmap->bmp_header.height, end_line);
 	int temp_end = invertPosMatrix(bitmap->bmp_header.height, init_line);
 
 	for (int i = temp_init; i < temp_end; i++) {
 		for (int j = 0; j < bitmap->bmp_header.width; j++) {
-			if (i == temp_init || i == temp_end - 1 || getGray(bitmap->matrix[i][j]) > threshold)
+			if (getGray(bitmap->matrix[i][j]) > threshold)
 			{
 				bitmap->matrix[i][j] = WHITE;	
 			}
@@ -665,6 +676,7 @@ int main()
 {
 	char *dir_name = "validos/";
 	DIR *dir = opendir(dir_name);
+	FILE *output = fopen("result.txt", "w+");
 	if (dir == NULL)
 	{
 		perror("Diretório 'validos' não encontrado");
@@ -678,54 +690,64 @@ int main()
 		// if (strcmp(ent->d_name, "st1283.bmp") == 0)
 		// if (strcmp(ent->d_name, "st1012.bmp") == 0)
 		// if (strcmp(ent->d_name, "st1355.bmp") == 0)
-		if (strcmp(ent->d_name, "st1073.bmp") == 0)
-		// if (ext != NULL && strcmp(ext, ".bmp") == 0)
+		// if (strcmp(ent->d_name, "st1049.bmp") == 0)
+		// if (strcmp(ent->d_name, "st1551.bmp") == 0)
+		if (ext != NULL && strcmp(ext, ".bmp") == 0)
 		{
 			Bitmap bitmap;
 			char file_name[20];
 			snprintf(file_name, sizeof(file_name), "%s%s", dir_name, ent->d_name);
 			bitmap.matrix = loadBitmap(file_name, &bitmap.bmp_header);
 
-			saveBitmap("nova_imagem.bmp", bitmap.bmp_header, bitmap.matrix);
+			// saveBitmap("nova_imagem.bmp", bitmap.bmp_header, bitmap.matrix);
 
 
 			int init_line = getLinhaInicial(bitmap.bmp_header, bitmap.matrix);
 			int end_line = getLinhaFinal(bitmap.bmp_header, bitmap.matrix);
 			
-			//bitmap.matrix = sobelFiltering(&bitmap);
 			contrast(init_line, end_line, &bitmap);
 
 			int threshold = otsuThresholder(&bitmap);
 
 			binarizeBitmap(init_line, end_line, &bitmap, threshold);			
 
-			saveBitmap("nova_imagem2.bmp", bitmap.bmp_header, bitmap.matrix);	
-			// return 0;
+			// saveBitmap("nova_imagem2.bmp", bitmap.bmp_header, bitmap.matrix);	
 
 			dilation(init_line, end_line, bitmap);
 			erosion(init_line, end_line, bitmap);
-			dilation(init_line, end_line, bitmap);
 			erosion(init_line, end_line, bitmap);
 			erosion(init_line, end_line, bitmap);
 			dilation(init_line, end_line, bitmap);
-
+			dilation(init_line, end_line, bitmap);
+			dilation(init_line, end_line, bitmap);
+			dilation(init_line, end_line, bitmap);
+			dilation(init_line, end_line, bitmap);
+			dilation(init_line, end_line, bitmap);
+			dilation(init_line, end_line, bitmap);
 
 			Nodes nodes = getWoodNodes(init_line, end_line, bitmap);
 
-			saveBitmap("nova_imagem3.bmp", bitmap.bmp_header, bitmap.matrix);
+			// saveBitmap("nova_imagem3.bmp", bitmap.bmp_header, bitmap.matrix);
 
-			printf("%s %d %d %d", ent->d_name, init_line, end_line, nodes.size);
+			/*printf("%s %d %d %d", ent->d_name, init_line, end_line, nodes.size);
 			for (int i = 0; i < nodes.size; ++i)
 			{
 				printf(" %d %d", nodes.nodes[i].row, nodes.nodes[i].col);
 			}
-			printf("\n");
+			printf("\n");*/
+			fprintf(output, "%s %d %d %d", ent->d_name, init_line, end_line, nodes.size);
+			for (int i = 0; i < nodes.size; ++i)
+			{
+				fprintf(output, " %d %d", nodes.nodes[i].row, nodes.nodes[i].col);
+			}
+			fprintf(output, "\n");
 			free(nodes.nodes);
 			freeMatrix(bitmap.bmp_header, bitmap.matrix);
 		}
 	}
 
 	closedir(dir);
+	fclose(output);
 	
 	return 0;
 }
